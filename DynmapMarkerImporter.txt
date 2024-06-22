@@ -4,7 +4,7 @@
 // @version      0.1
 // @description  Import markers into Dynmap from a text file
 // @author       MerelyMiserable
-// @match        http://51.195.189.157:25617/*
+// @match        http://ip:port/*
 // @grant        none
 // ==/UserScript==
 
