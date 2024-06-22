@@ -1,0 +1,191 @@
+// ==UserScript==
+// @name         Dynmap Marker Importer
+// @namespace    https://merely.is-a.dev/
+// @version      0.1
+// @description  Import markers into Dynmap from a text file
+// @author       MerelyMiserable
+// @match        http://51.195.189.157:25617/*
+// @grant        none
+// ==/UserScript==
+
+
+
+(function() {
+    'use strict';
+
+    var fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.style.display = 'none';
+
+    var selectButton = document.createElement('button');
+    selectButton.innerText = 'Select Marker File';
+    selectButton.style.position = 'fixed';
+    selectButton.style.bottom = '10px';
+    selectButton.style.right = '10px';
+    selectButton.style.zIndex = 1000;
+    selectButton.style.padding = '10px 20px';
+    selectButton.style.borderRadius = '10px';
+    selectButton.style.backgroundColor = '#333';
+    selectButton.style.color = '#fff';
+    selectButton.style.border = 'none';
+    selectButton.style.boxShadow = '0 2px 4px rgba(0, 0, 0, 0.2)';
+    selectButton.style.cursor = 'pointer';
+    selectButton.style.fontFamily = 'Arial, sans-serif';
+    selectButton.style.fontSize = '14px';
+    selectButton.style.outline = 'none';
+
+    document.body.appendChild(fileInput);
+    document.body.appendChild(selectButton);
+
+    selectButton.addEventListener('click', function() {
+        fileInput.click();
+    });
+
+    fileInput.addEventListener('change', function(event) {
+        var file = event.target.files[0];
+        if (file) {
+            var reader = new FileReader();
+            reader.onload = function(e) {
+                var content = e.target.result;
+                processFileContent(content);
+            };
+            reader.readAsText(file);
+        }
+    });
+
+    var dynmap = window.dynmap;
+    var dynmapmarkersets = window.dynmapmarkersets || {};
+
+    function processFileContent(content) {
+        var lines = content.trim().split('\n');
+        var dataLines = lines.slice(6);
+
+        // Clear existing marker sets
+        for (var key in dynmapmarkersets) {
+            dynmap.map.removeLayer(dynmapmarkersets[key].layergroup);
+        }
+        dynmapmarkersets = {};
+
+        dataLines.forEach(function(line) {
+            var parts = line.split(';');
+            if (parts.length >= 4) {
+                var seed = parts[0];
+                var structure = parts[1];
+                var x = parts[2];
+                var z = parts[3];
+
+                // Exclude structures with "geode" in their name
+                if (structure.toLowerCase().indexOf('geode') === -1) {
+                    addMarker(seed, structure, x, z);
+                }
+            }
+        });
+
+        // Trigger markers updated event
+        $(dynmap).trigger('markersupdated', [dynmapmarkersets]);
+    }
+
+    function addMarker(seed, structure, x, z) {
+        if (!dynmapmarkersets[structure]) {
+            dynmapmarkersets[structure] = {
+                id: structure,
+                label: structure,
+                hide: false,
+                layerprio: 0,
+                minzoom: -1,
+                maxzoom: -1,
+                showlabels: true,
+                markers: {},
+                areas: {},
+                lines: {},
+                circles: {}
+            };
+            createMarkerSet(dynmapmarkersets[structure], Date.now());
+        }
+
+        var marker = {
+            label: structure,
+            markup: false,
+            x: parseInt(x, 10),
+            y: 64,
+            z: parseInt(z, 10),
+            icon: 'default',
+            desc: '',
+            dim: '16x16',
+            minzoom: -1,
+            maxzoom: -1,
+            our_layer: null
+        };
+
+        var markerId = `${seed}_${structure}_${x}_${z}`;
+        dynmapmarkersets[structure].markers[markerId] = marker;
+        createMarker(dynmapmarkersets[structure], marker, Date.now());
+    }
+
+    function createMarker(set, marker, ts) {
+        if (marker.our_layer) {
+            set.layergroup.removeLayer(marker.our_layer);
+            delete marker.our_layer;
+            marker.our_layer = null;
+        }
+
+        var markerPosition = getPosition(marker);
+        marker.our_layer = new L.CustomMarker(markerPosition, {
+            elementCreator: function() {
+                var div = document.createElement('div');
+
+                var markerPosition = getPosition(marker);
+                marker.our_layer.setLatLng(markerPosition);
+                var url = concatURL(dynmap.options.url.markers, '_markers_/' + marker.icon + '.png');
+
+                $(div)
+                    .addClass('Marker')
+                    .addClass('mapMarker')
+                    .append($('<img/>').addClass('markerIcon' + marker.dim).attr({ src: url }));
+                if (marker.label != "")
+                    $(div).append($('<span/>')
+                        .addClass(set.showlabels ? 'markerName-show' : 'markerName')
+                        .addClass('markerName_' + set.id)
+                        .addClass('markerName' + marker.dim)
+                        .append(marker.label));
+                return div;
+            }
+        });
+        marker.timestamp = ts;
+        if (marker.desc) {
+            var popup = document.createElement('div');
+            $(popup).addClass('MarkerPopup').append(marker.desc);
+            marker.our_layer.bindPopup(popup, {});
+        }
+
+        updateMarker(set, marker, dynmap.map.getZoom());
+    }
+
+    function createMarkerSet(set, ts) {
+        set.layergroup = new L.LayerGroup();
+        set.timestamp = ts;
+        if (!set.hide)
+            dynmap.map.addLayer(set.layergroup);
+
+        if (dynmap.addToLayerSelector) {
+            dynmap.addToLayerSelector(set.layergroup, set.label, set.layerprio || 0);
+        }
+    }
+
+    function getPosition(marker) {
+        return dynmap.getProjection().fromLocationToLatLng({ x: marker.x, y: marker.y, z: marker.z });
+    }
+
+    function updateMarker(set, marker, mapzoom) {
+        if (set && marker && marker.our_layer) {
+            var minzoom = (marker.minzoom >= 0) ? marker.minzoom : set.minzoom;
+            var maxzoom = (marker.maxzoom >= 0) ? marker.maxzoom : set.maxzoom;
+            if (maxzoom < 0) maxzoom = 100;
+            set.layergroup.removeLayer(marker.our_layer);
+            if ((mapzoom >= minzoom) && (mapzoom <= maxzoom)) {
+                set.layergroup.addLayer(marker.our_layer);
+            }
+        }
+    }
+
+})();
